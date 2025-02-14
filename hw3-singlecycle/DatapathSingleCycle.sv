@@ -6,8 +6,8 @@
 // RV opcodes are 7 bits
 `define OPCODE_SIZE 6:0
 
-`include "../hw2a/divider_unsigned.sv"
-`include "../hw2b/cla.sv"
+`include "divider_unsigned.sv"
+`include "cla.sv"
 
 module RegFile (
     input logic [4:0] rd,
@@ -24,9 +24,28 @@ module RegFile (
   localparam int NumRegs = 32;
   logic [`REG_SIZE] regs[NumRegs];
 
-  // TODO: your code here
+  assign rs1_data = regs[rs1]; // 1st read port
+  assign rs2_data = regs[rs2]; // 2nd read port
+ 
+  genvar j;
+  generate
+    for (j = 1; j < 32; j = j + 1)
+      begin
+        always_ff @(posedge clk) begin
+          if (rst) begin
+            regs[j] <= 32'd0;
+          end else begin
+            if (we && rd == j) begin
+              regs[j] <= rd_data;
+            end
+          end
+        end
+      end
+  endgenerate
+  // add other registers using genvar and for loop
 
 endmodule
+
 
 module DatapathSingleCycle (
     input wire clk,
@@ -185,16 +204,176 @@ module DatapathSingleCycle (
       end
     end
   end
-
   logic illegal_insn;
 
+  logic [`REG_SIZE] rd_data_temp;
+  assign rd_data = rd_data_temp;
+  logic [`REG_SIZE] rd_data;
+  logic [`REG_SIZE] rs1_data;
+  logic [`REG_SIZE] rs2_data;
+  logic we;
+
+  RegFile rf(
+      .rd(insn_rd),
+      .rd_data(rd_data), 
+      .rs1(insn_rs1),
+      .rs1_data(rs1_data),
+      .rs2(insn_rs2),
+      .rs2_data(rs2_data),
+      .clk(clk),
+      .we(we),
+      .rst(rst)
+  );
+
+  logic [31:0] a;
+  logic [31:0] b;
+  wire cin;
+  wire [31:0] sum;
+
+  cla adder(
+    .a(a),
+    .b(b),
+    .cin(cin),
+    .sum(sum)
+  );
+
   always_comb begin
+    a = 0;
+    b = 0;
+    we = 0;
+    rd_data_temp = 0;
     illegal_insn = 1'b0;
+    pcNext = 0;
+    halt = 0;
 
     case (insn_opcode)
       OpLui: begin
-        // TODO: start here by implementing lui
+        rd_data_temp = {insn_from_imem[31:12], 12'b0};
+        we = 1;
+        pcNext = pcCurrent + 4;
       end
+      
+      OpAuipc: begin
+        a = pcCurrent;
+        b = $signed({insn_from_imem[31:12], 12'b0});
+        rd_data_temp = sum;
+        we = 1;
+        pcNext = pcCurrent + 4;
+      end
+      
+      OpRegReg: begin
+        if (insn_add == 1) begin
+          a = rs1_data;
+          b = rs2_data;
+          rd_data_temp = sum;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_sll == 1) begin
+          rd_data_temp = rs1_data << rs2_data[4:0];
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_srl == 1) begin
+          rd_data_temp = rs1_data >> rs2_data[4:0];
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_or == 1) begin
+          rd_data_temp = rs1_data | rs2_data;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_xor == 1) begin
+          rd_data_temp = rs1_data ^ rs2_data;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_sra == 1) begin
+          rd_data_temp = $signed(rs1_data) >>> $signed(rs2_data[4:0]);
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_sub == 1) begin
+          a = rs1_data;
+          b = ~rs2_data + 1;
+          rd_data_temp = sum;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_and == 1) begin
+          rd_data_temp = rs1_data & rs2_data;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_slt == 1) begin
+          rd_data_temp = ($signed(rs1_data) < $signed(rs2_data)) ? 1 : 0;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_sltu == 1) begin
+          rd_data_temp = (rs1_data < rs2_data) ? 1 : 0;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end
+      end
+      
+      OpRegImm: begin
+        if (insn_addi == 1) begin
+          a = rs1_data;
+          b = imm_i_sext;
+          rd_data_temp = sum;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_ori == 1) begin
+          rd_data_temp = rs1_data | imm_i_sext;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_slli == 1) begin
+          rd_data_temp = rs1_data << imm_i_sext[4:0];
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_andi == 1) begin
+          rd_data_temp = rs1_data & imm_i_sext;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_xori == 1) begin
+          rd_data_temp = rs1_data ^ imm_i_sext;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_slti == 1) begin
+          rd_data_temp = ($signed(rs1_data) < $signed(imm_i_sext)) ? 1 : 0;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_srli == 1) begin
+          rd_data_temp = rs1_data >> imm_i_sext[4:0];
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_srai == 1) begin
+          rd_data_temp = $signed(rs1_data) >>> $signed(imm_i_sext[4:0]);
+          we = 1;
+          pcNext = pcCurrent + 4;
+        end else if (insn_sltiu == 1) begin
+          rd_data_temp = (rs1_data < imm_i_sext) ? 1 : 0;
+          we = 1;
+          pcNext = pcCurrent + 4;
+        
+        end
+      end
+      
+      OpBranch: begin
+        if (insn_beq == 1) begin
+          pcNext = (rs1_data == rs2_data) ? (pcCurrent + imm_b_sext) : (pcCurrent + 4);
+        end else if (insn_bge == 1) begin
+          pcNext = ($signed(rs1_data) >= $signed(rs2_data)) ? (pcCurrent + imm_b_sext) : (pcCurrent + 4);
+        end else if (insn_bgeu == 1) begin
+          pcNext = (rs1_data >= rs2_data) ? (pcCurrent + imm_b_sext) : (pcCurrent + 4);
+        end else if (insn_bne == 1) begin
+          pcNext = (rs1_data != rs2_data) ? (pcCurrent + imm_b_sext) : (pcCurrent + 4);
+        end else if (insn_blt == 1) begin
+          pcNext = ($signed(rs1_data) < $signed(rs2_data)) ? (pcCurrent + imm_b_sext) : (pcCurrent + 4);
+        end else if (insn_bltu == 1) begin
+          pcNext = (rs1_data < rs2_data) ? (pcCurrent + imm_b_sext) : (pcCurrent + 4);
+        end
+      end
+      
+      OpEnviron: begin
+        if (insn_ecall == 1 && insn_from_imem[31:7] == 0) begin
+          halt = 1;
+        end
+      end
+      
       default: begin
         illegal_insn = 1'b1;
       end
@@ -203,81 +382,6 @@ module DatapathSingleCycle (
 
 endmodule
 
-/* A memory module that supports 1-cycle reads and writes, with one read-only port
- * and one read+write port.
- */
-module MemorySingleCycle #(
-    parameter int NUM_WORDS = 512
-) (
-    // rst for both imem and dmem
-    input wire rst,
-
-    // clock for both imem and dmem. See RiscvProcessor for clock details.
-    input wire clock_mem,
-
-    // must always be aligned to a 4B boundary
-    input wire [`REG_SIZE] pc_to_imem,
-
-    // the value at memory location pc_to_imem
-    output logic [`REG_SIZE] insn_from_imem,
-
-    // must always be aligned to a 4B boundary
-    input wire [`REG_SIZE] addr_to_dmem,
-
-    // the value at memory location addr_to_dmem
-    output logic [`REG_SIZE] load_data_from_dmem,
-
-    // the value to be written to addr_to_dmem, controlled by store_we_to_dmem
-    input wire [`REG_SIZE] store_data_to_dmem,
-
-    // Each bit determines whether to write the corresponding byte of store_data_to_dmem to memory location addr_to_dmem.
-    // E.g., 4'b1111 will write 4 bytes. 4'b0001 will write only the least-significant byte.
-    input wire [3:0] store_we_to_dmem
-);
-
-  // memory is arranged as an array of 4B words
-  logic [`REG_SIZE] mem[NUM_WORDS];
-
-  initial begin
-    $readmemh("mem_initial_contents.hex", mem, 0);
-  end
-
-  always_comb begin
-    // memory addresses should always be 4B-aligned
-    assert (pc_to_imem[1:0] == 2'b00);
-    assert (addr_to_dmem[1:0] == 2'b00);
-  end
-
-  localparam int AddrMsb = $clog2(NUM_WORDS) + 1;
-  localparam int AddrLsb = 2;
-
-  always @(posedge clock_mem) begin
-    if (rst) begin
-    end else begin
-      insn_from_imem <= mem[{pc_to_imem[AddrMsb:AddrLsb]}];
-    end
-  end
-
-  always @(negedge clock_mem) begin
-    if (rst) begin
-    end else begin
-      if (store_we_to_dmem[0]) begin
-        mem[addr_to_dmem[AddrMsb:AddrLsb]][7:0] <= store_data_to_dmem[7:0];
-      end
-      if (store_we_to_dmem[1]) begin
-        mem[addr_to_dmem[AddrMsb:AddrLsb]][15:8] <= store_data_to_dmem[15:8];
-      end
-      if (store_we_to_dmem[2]) begin
-        mem[addr_to_dmem[AddrMsb:AddrLsb]][23:16] <= store_data_to_dmem[23:16];
-      end
-      if (store_we_to_dmem[3]) begin
-        mem[addr_to_dmem[AddrMsb:AddrLsb]][31:24] <= store_data_to_dmem[31:24];
-      end
-      // dmem is "read-first": read returns value before the write
-      load_data_from_dmem <= mem[{addr_to_dmem[AddrMsb:AddrLsb]}];
-    end
-  end
-endmodule
 
 /*
 This shows the relationship between clock_proc and clock_mem. The clock_mem is
